@@ -71,6 +71,8 @@ This guide assumes prior integration of RTEdbg data logging and configuration of
 
 *The following steps must be performed to add FreeRTOS trace:*
 
+The trace support files are in the the [**RTOS trace macros**](https://github.com/RTEdbg/RTOS_trace) Github repository.
+
 . Add `rte_FreeRTOS_trace_fmt.h` to the `Fmt` folder.
 . Add `rte_FreeRTOS_trace.h` to `RTEdbg\Fmt` folder.
 . Add `rte_FreeRTOS_trace.c` to the `RTEdbg` folder.
