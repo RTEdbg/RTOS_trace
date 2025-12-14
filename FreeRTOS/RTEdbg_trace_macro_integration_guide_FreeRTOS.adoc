@@ -1,0 +1,228 @@
+= RTEdbg Trace Macro Integration Guide for FreeRTOS
+
+This document presents the integration of link:https://github.com/RTEdbg/RTEdbg[*RTEdbg*] trace functionality into FreeRTOS-based projects and outlines the data format used for subsequent graphical and textual analysis.
+
+RTOS-aware debugging provides a necessary baseline by exposing the internal OS structures and data (such as running tasks, stack utilization, and queues) during a paused debugging session. On the other hand, deep runtime analysis (tracing) requires instrumenting the RTOS and firmware with trace macros to provide continuous data. Tracing enables visual execution analysis, helping developers quickly identify critical timing and concurrency issues such as task starvation, task jitter, deadlock, and priority inversion. Crucially, it also reveals the exact activities of all tasks and Interrupt Service Routines (ISRs) over time. The solution provides equally efficient and high-speed logging for all RTOS and application data, including exception handler crash dumps.
+
+Several textual RTOS log files and a VCD (Value Change Dump) file are generated during the decoding of the binary log file. The VCD file enables graphical representation of the data, allowing for efficient analysis of the behavior of applications running under an RTOS. The current FreeRTOS trace and visualization solution uses the core functionality of the RTEdbg toolkit. This solution is subject to continuous improvement and refinement based on community feedback.
+
+*Compatibility*: FreeRTOS versions v9 and later are supported. Compatibility with older FreeRTOS versions has not been tested. No modification of the FreeRTOS source code is required to utilize the RTEdbg trace functionality.
+
+This document presents the following key aspects of the tracing solution:
+
+. Object naming conventions.
+. The necessary files and configuration settings required within the instrumented project.
+. The specific information logged by the trace macros.
+. The implementation specifics and unique features of the solution.
+
+== Core Capabilities of the Solution
+
+Integrating FreeRTOS trace macros provides deep insight into the kernel’s operation, including:
+
+* Individual task execution times, state changes, priority changes, notifications, etc.
+* Queue depth (item count).
+* RTOS kernel-level errors detected during execution.
+* Synchronization events (semaphore giving/taking, message signaling, etc.).
+
+*Application Tracing*: Crucially, meaningful analysis often extends beyond basic RTOS state changes. What happens in the application code is usually far more important, encompassing:
+
+* Application-level events.
+* Data the firmware receives, measures, and processes.
+* Specific errors and warnings reported by the application logic, etc.
+
+Logging and graphically displaying this application-specific data, alongside RTOS trace data, is essential for a complete timing and data analysis of the entire firmware.
+
+== Object Naming Conventions
+
+Unlike other tracing solutions (e.g., SystemView or Tracealyzer), RTEdbg does not require explicit object registration (for tasks, timers, ISRs, etc.). Instead, object identification is based on a naming convention to tag and differentiate logged information. Only the first four characters of object names (such as task names) are logged alongside the runtime execution data. Storing longer object names was deliberately avoided to minimize the length of logged messages, thereby maximizing the depth of the history that can be stored in the circular buffer.
+
+*Identification Mechanism*: To identify an object within the logs, RTEdbg stores and utilizes the first four characters of the object's name (referred to below as *[name]*). In FreeRTOS log files, three main (named) object groups are used for message tagging:
+
+* *Task*[name]
+* *Queue*[name]
+* *Timer*[name]
+
+The first four characters of an object's name must be unique within its respective group. Failure to ensure this uniqueness will prevent proper object identification during log analysis. Shorter and longer names are permitted; however, only the first up to four characters will be logged and subsequently printed on the host during log file decoding or shown on a graph. The object's group name is prefixed to the object name. For instance, the task named "Main" will appear in the trace tool as "TaskMain".
+
+*Example*: The task name "CANreceive" will be recorded as the truncated name "CANr" and printed in the log files with the prefix, appearing as "TaskCANr".
+
+. *Task and Timer* names are already part of the FreeRTOS data structures, eliminating the need for explicit object registration.
+. *Stream Buffer* names were not envisioned for FreeRTOS Stream Buffers. They are identified solely by their memory address - e.g. Stream2000F01C.
+. *Queues, Mutexes, and Semaphores*: Since mutexes and semaphores are implemented internally as special queue types in FreeRTOS, their names in the logs will be printed as *Queue[name]* most of the time. The programmer must manually assign names to queues, mutexes, and semaphores using the link:https://www.freertos.org/Documentation/02-Kernel/04-API-references/06-Queues/15-vQueueAddToRegistry[*vQueueAddToRegistry()*] function. Naming these objects is highly recommended for log readability but is not mandatory. If an object name is not provided, the system defaults to displaying the lowest 16 bits of the queue handle's address as a four-digit hexadecimal number. If, for example, the queue handle address is 0x2000A7B0, its name in the log will appear as QueueA7B0.
+
+*Note*: The object handle address for dynamically allocated objects is only known after the object has been successfully created and memory for the object and its handle has been allocated. Consequently, the object cannot be registered before the initial RTOS call that successfully creates the object (e.g., a queue). Therefore, the function call to register the object name (vQueueAddToRegistry()) must be placed only after the object has been successfully registered with the RTOS. If an error occurs during queue creation, its name will be printed as "QueueXXXX created", where XXXX represents the four-digit hexadecimal value of the lower 16 bits of the queue handle.
+
+*Tip for Static Objects*: Names can be pre-assigned to statically allocated queues, semaphores, and mutexes before they are initialized or registered by the RTOS. This ensures the correct name is logged immediately upon registration, which is critical for capturing initial trace events, especially when early errors are reported.
+
+See the following example:
+[source,c]
+----
+static StaticQueue_t xTestStaticQueue;
+static uint8_t  xTestQueueBuffer[TEST_QUEUE_LENGTH * TEST_QUEUE_ITEM_SIZE];
+
+vQueueAddToRegistry((QueueHandle_t)&xTestStaticQueue, "TestQueue");
+xTestQueue = xQueueCreateStatic(TEST_QUEUE_LENGTH, TEST_QUEUE_ITEM_SIZE,
+                                xTestQueueBuffer, &xTestStaticQueue);
+----
+
+== The Necessary Files and Configuration Settings Required
+
+This guide assumes prior integration of RTEdbg data logging and configuration of all required IDE or makefile settings. Refer to Chapter 2 of the RTEdbg Manual for detailed setup instructions.
+
+*The following steps must be performed to add FreeRTOS trace:*
+
+. Add `rte_FreeRTOS_trace_fmt.h` to the `Fmt` folder.
+. Add `rte_FreeRTOS_trace.h` to `RTEdbg\Fmt` folder.
+. Add `rte_FreeRTOS_trace.c` to the `RTEdbg` folder.
+. Add the following two lines
++
+----
+/**** Format definitions for FreeRTOS trace macros ****/
+// INCLUDE("rte_FreeRTOS_trace_fmt.h")
+----
++
+to the `rte_main_fmt.h` in the `RTEdbg\Fmt` folder - after the line
++
+----
+// INCLUDE("rte_system_fmt.h")
+----
+
+=== FreeRTOSConfig.h Configuration
+
+*A)* Add the following macros to the FreeRTOS config file (close to the end of file) and set the values for trace options that you want to enable/disable at compile time. If these macros are not added the default setting (as defined in the "rte_FreeRTOS_trace.h") will be used.
+
+[source,c]
+----
+/* Enable FreeRTOS tracing for specific groups of functions */
+#define RTE_TRACE_RTOS_BASIC        1   // Most important task, queue and notification trace macros
+#define RTE_TRACE_RTOS_TASKS        1   // Task related events, including notifications
+#define RTE_TRACE_RTOS_MALLOC       1   // Malloc and free
+#define RTE_TRACE_RTOS_TIMER        1   // Timer related events
+#define RTE_TRACE_RTOS_QUEUE        1   // Queue, semaphore, and mutex related events
+#define RTE_TRACE_RTOS_STREAMS      1   // Stream related events
+#define RTE_TRACE_RTOS_EXPERT       0   // Less important FreeRTOS events (for expert users)
+#define RTE_TRACE_RTOS_TRACE_IO     0   // Enable traceENTER/traceEXIT macros (for expert users)
+----
+
+. Using the message filter, groups of trace macros can be selectively enabled or disabled at runtime during firmware testing. If a trace macro group is disabled at compile time it can not be enabled using message filter at runtime.
+. Message filter names parallel the compile-time trace configuration macros. For example, setting the filter F_RTOS_BASIC at runtime enables the identical group of trace macros as defining the compile-time macro RTE_TRACE_RTOS_BASIC.
+
+*B)* Add the following two lines close to the end of the FreeRTOS config file also (after the #defines shown above).
+
+[source,c]
+----
+#define RTE_FREERTOS_VERSION 110200  // Example shown for FreeRTOS V11.2.0
+#include "rte_FreeRTOS_trace.h"      // RTEdbg FreeRTOS trace macros
+----
+
+*C)* The value of configUSE_TRACE_FACILITY in the "FreeRTOSConfig.h" can be 1 (enabled) or 0 (disabled). If this optional functionality is not required for the FreeRTOS debugging, you can disable it to conserve both program memory and RAM.
+
+*D)* The configQUEUE_REGISTRY_SIZE macro in the "FreeRTOSConfig.h", must be set to a value that is greater than or equal to the total number of queues, mutexes, and semaphores used in the application.
+
+== Output Files Generated During Binary Log File Decoding
+
+The RTEmsg utility generates several distinct log files for specialized analysis during log file decoding:
+
+* *Main.log*: Contains general information about all logged messages generated by the application. All information written to the RTOS_main.log is written to the Main.log also.
+* *RTOS_main.log*: Includes all messages specifically logged using the FreeRTOS trace macros.
+* *RTOS_tasks.log*: Records the execution times for all active FreeRTOS tasks. +
+*Note*: The data for the first task that was executed is incorrect because, when switching to the next task, the name of the previous task is not logged properly and its execution time is unknown also (zero is displayed).
+* *RTOS_errors.log*: Stores all messages that report FreeRTOS detected errors. This file captures messages from macros containing the keyword FAILED in their name.
+* *RTOS_timing.vcd*: Timing information is exported separately to a VCD (Value Change Dump) file. This standard format allows the data to be visualized and analyzed graphically using common VCD viewers, such as GTKWave.
+
+*Note*: Programmers are free to log custom (application specific) information into the specified files and other custom log files as needed. For large-scale projects, it is advisable to separate data into multiple files.
+
+== Specific Information Logged by the Trace Macros
+
+To ensure clarity interpreting the data written to the `RTOS_timing.vcd` file, the following provides an extended description of the logged signals. These signal names are what will appear in the waveform viewer upon opening the VCD file.
+
+=== Tasks, Task Notifications and Event Groups
+
+The following signals are provided for task execution visualization:
+
+* *TaskXXXX*: 1 - task is executing, 0 - not executing
+* *TaskXXXX_Suspended*: 1 - task suspended, 0 - not suspended
+* *TaskXXXX_priority*: Only priority changes are logged assuming that most tasks have fixed priorities known to programmers.
+* *TaskXXXX_Delay*: Task requested a delay using vTaskDelay()
+* *TaskXXXX_DelayUntil*: Task requested a delay using vTaskDelayUntil()
+* *Tasks*: Textual information about tasks, for example when a particular task has been started or deleted.
+* *TaskName*: Name of the currently executing task.
+* *TaskXXXX_NotifyGiveISR, TaskXXXX_NotifyGive, TaskXXXX_NotifyWait, TaskXXXX_NotifyTake*: Shows events related to notifications between tasks.
+* *TaskXXXX_PriorityInherit*: Priority Inheritance (PI) is a crucial synchronization mechanism in real-time operating systems (RTOS) designed to mitigate the problem of priority inversion. The protocol dynamically raises the effective priority of a low-priority task (L) to that of the highest-priority task (H) currently blocked while waiting for the resource held by L. This ensures that L completes its critical section quickly, thereby minimizing the delay experienced by H. This signal is 1 for the time in which the task's priority was elevated due to this inheritance.
+* *EventGroup_XXXXXXXX*: Text messages for event group trace macros.
+
+*Task Execution Time Tracing Capabilities*: The system logs context switches, and the resulting graph displays the total time allocated by the RTOS to each individual task. The recorded and displayed execution times inherently include the time consumed within the RTOS kernel and any Interrupt Service Routines (ISRs). +
+*Note:* In well-designed embedded software, Interrupt Service Routines (ISRs) should execute very quickly, delegating complex data processing to dedicated tasks. These tasks are typically woken up using notifications or by writing/reading data via queues. When this architecture is followed, the ISR execution time will have a minimal impact on the task's observed execution time. +
+Custom ISR trace can be added to the ISR code - see the `ISR (Interrupt Service Routines)` section below.
+
+=== Queues
+
+The value displayed by the signal *Queue[name]_items* indicates the number of items currently held in the queue, or the counter value for a counting semaphore. For mutexes and binary semaphores, a displayed value of 1 signifies that the resource is occupied (locked or taken).
+
+* *Queues*: Textual messages or comments detailing queue-related events. This includes status updates such as a queue being registered or deregistered with the RTOS.
+* *QueueXXXX_peek, QueueXXXX_peek_ISR*: Event of queue peek
+
+*Note*: For a queue, the standard RTOS trace shows when data was written, but not what the content was. If the data content is critical, it must be logged separately by the application code. For instance, the entire contents of a data structure being written to the queue can be recorded using one RTEdbg macro like the `RTE_MSGN()`.
+
+=== Mutexes and Semaphores
+
+*Semaphore* and *Mutex* - Textual log messages explicitly reported by the RTOS kernel for mutexes and semaphores. In FreeRTOS, mutexes and semaphores are implemented internally using the queue mechanisms. Consequently, the kernel logs semaphores and mutexes as queue operations most of the time. Developers must be aware of the underlying implementation and correctly interpret the logged data - both in textual log files and graphically (VCD data) - during the testing phase.
+
+*Example:* The textual log entry `QueueReceive from QueueSem1 failed...` is logged if the semaphore named `Sem1` is already taken, and the kernel was unable to grant it to the requesting task.
+
+=== ISR (Interrupt Service Routines)
+
+The RTEdbg toolkit does not include a dedicated object type specifically for logging ISRs. Instead, you can log the boundaries of the ISR: ISR Enter and ISR Exit can be recorded separately.
+
+However, for very short and high-frequency interrupts, it is often recommended to log only ISR Enter. This is because the maximum execution duration of such ISRs is typically known, making the overhead of logging the ISR Exit unnecessary.
+
+If an ISR calls an RTOS function - such as Task notify - the RTOS kernel typically logs this event automatically. Consequently, a separate log entry dedicated solely to recording the ISR execution is generally not required.
+
+=== Streams / Message buffers
+
+*StreamXXXXXXXX*: Positive values indicate the number of bytes written, while negative values represent the bytes read from the stream (XXXXXXXX - stream address).
+
+=== Memory allocation signal
+
+The signal *Malloc_Free*: Positive values indicate the amount of memory allocated, while negative values represent the amount of memory freed (or deallocated).
+
+=== Error reporting signals
+
+Logging in the format described below is automatically performed for all trace macros whose names end with the suffix FAILED.
+
+* *RTOSerror*: A momentary pulse is displayed on the signal waveform, indicating the exact timestamp when the error was logged.
+* *RTOSerrorText*: A detailed textual message providing the description of the RTOS error.
+
+=== Various signals
+
+* *Kernel*: RTOS kernel related messages such as "Scheduler started", "TaskXXXX deleted" or "TaskXXXX created"
+* *IncrementTick*: Displays current RTOS tick value.
+* *RTOStickIRQ*: Displays RTOS tick events.
+* *TimerXXXX*: Text messages regarding creating, setting, and triggering timers.
+* *Low_power_idle*: 1 while in idle mode and 0 otherwise.
+* *IncreaseTickCount*: Shows w hat was the change in the tick count.
+* *PendFuncCall, PendFuncCall_ISR*: Displays pending function call events.
+
+=== Application specific events and data
+
+Programmers have complete flexibility when logging application-specific data. Application-specific data is logged in binary format; the corresponding printf-style strings reside only on the host machine. Consequently, strings do not need to be copied into a circular buffer during logging, nor do they consume space in program memory (Flash/ROM).
+
+=== Data Organization Strategy depends on project size
+
+. *Small Projects (single graph)*: For smaller projects where the total number of signals in the VCD file is relatively low, application-specific data can be written directly to same VCD file as the RTOS trace. This strategy allows all events and data to be displayed on a single, unified graph.
+. *Large Projects (multiple custom log files and graphs)*: For larger, complex projects, it is typically advisable to export data into multiple VCD files and other textual formats (e.g., .log, .csv) to maintain clarity. Software tools such as GTKWave allow for the concurrent loading of two or more VCD files, displaying them with synchronized timing across multiple windows. Critical data can be logged into two or more VCD files. This ensures the critical data is readily available for concurrent analysis across different graphical views.
+
+== Miscellaneous data
+
+. The *timestamp values* in the log files are displayed in the RTEmsg timestamp format, which is in milliseconds (ms) by default. Both the output unit (s, ms, us) and the precision (number of decimal places) can be set using RTEmsg command line options.
+. *Object coverage:* Trace information is exported to the VCD file and other log files exclusively for objects (tasks, queues, semaphores, etc.) that actively experienced an event during the trace session. Consequently, the log files cannot contain data for all RTOS processes and other objects such as queues if those objects remained inactive.
+. *Object identification* (tasks, queues, etc.) is always possible, even in post-mortem debugging. This is achieved because object metadata (names and IDs) is not streamed to the host. By eliminating the need to store registration structures and other object data within the circular buffer, more space is made available, providing a longer, more detailed event history for analysis. This is particularly valuable in post-mortem scenarios where the debug probe may not have been permanently connected to the embedded system to capture object information.
+. *IDLE Mode:* If you set configUSE_TICKLESS_IDLE to 1 in your project's FreeRTOSConfig.h, then the default versions of the timestamp drivers, which are part of the RTEdbg toolkit, do not allow for correct time measurement in idle mode. The programmer must ensure that after returning from sleep, the long timestamp (t_stamp variable) is manually increased by the duration of the sleep within the timestamp driver or their own code.
+. The RTOS tracing solution is open, *allowing the trace macros to be fully customized* as required. Developers can easily prevent unnecessary data logging by excluding (or deleting) specific trace macro definitions. Furthermore, individual groups of trace macros can be selectively excluded either at compile-time or at runtime. For runtime control, the message filter number can be defined for a specific or custom trace macro group, enabling developers to dynamically disable them during code execution as needed.
+
+
+== Additional documents and information
+1. link:RTOS_Error_Handling_and_Reporting.md[*RTOS Error Handling and Reporting*] - This document presents a non-intrusive method for logging essential debugging information, specifically the identity of the function that invokes the RTOS error handler. It also demonstrates how to implement logging within FreeRTOS Trace Hook functions, specifically for reporting errors in critical scenarios such as stack overflow and allocation failures (e.g., malloc failure).
+1. link:../RTOS_trace_customization_and_porting.adoc[*RTOS Trace Customization and Porting*] - Information for developers intending to further enhance or extend the existing FreeRTOS trace functionality, and developers looking to port the trace integration to other RTOS platforms using the FreeRTOS implementation as a reference.
+1. For a quick start with *GTKWave* VCD Viewer without a lot of reading, see link:https://github.com/RTEdbg/RTEdbg/blob/master/docs/GTKWave-Quick_Introduction_and_Shortcuts.adoc[*GTKWave - Quick Introduction and Shortcuts*].  GTKWave is a free, open-source waveform viewer that can be utilized to analyze data gathered from both Real-Time Operating System (RTOS)-based and bare-metal embedded systems.
+1. The description of *FreeRTOS* trace macros is in https://freertos.org/Documentation/02-Kernel/02-Kernel-features/09-RTOS-trace-feature[*Trace Hook Macros*].

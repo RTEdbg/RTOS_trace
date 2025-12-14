@@ -1,0 +1,137 @@
+== RTOS Trace Customization and Porting
+
+This document is intended for two main audiences: developers intending to further enhance or extend the existing FreeRTOS trace functionality, and developers looking to port the trace integration to other RTOS platforms using the FreeRTOS implementation as a reference.
+
+=== FreeRTOS Trace Implementation
+
+FreeRTOS versions v9 and later are fully supported using the `rte_FreeRTOS_trace.h` trace macro file. The format definitions (printf-style strings) are in the `rte_FreeRTOS_trace_fmt.h` file. A low number of trace support functions are necessary - see `rte_FreeRTOS_trace.c`. No modification of the FreeRTOS source code is required to utilize the RTEdbg trace functionality. The sole implementation difference dependent on the RTOS version concerns FreeRTOS versions older than v10.4, which require a specialized set of task notification trace macros. Integration of the appropriate macro version is managed entirely through conditional compilation. The programmer only needs to define `RTE_FREERTOS_VERSION` macro in `FreeRTOSConfig.h`. Refer to the document link:FreeRTOS/RTEdbg_trace_macro_integration_guide_FreeRTOS.adoc[*RTEdbg Trace Macro Integration Guide FreeRTOS*] for further details. See also link:https://github.com/RTEdbg/FreeRTOS-trace-demo[*FreeRTOS Trace Demo*]
+
+Developers looking to enhance the FreeRTOS trace functionality or port the solution to a different operating system should read at least the following two sections of the link:https://github.com/RTEdbg/RTEdbg/releases/download/Documentation/RTEdbg.library.and.tools.manual.pdf[*RTEdbg Manual*]: +
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; *GETTING STARTED GUIDE* +
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; *Exporting Data for Visual Data and Timing Analysis* +      
+Also, review the implementation of the current FreeRTOS solution.
+
+=== A Few Implementation Details
+Here are a few tips and tricks that may not be immediately obvious to developers who are not very familiar with the RTEdbg toolkit.
+
+**Note:** For data exported to VCD (Value Change Dump) files, the identifier on the left side of the definition (e.g., `x SignalName=value`) serves as the *signal* name. The leading letter `x` defines the signal type (`b` for binary, `s` for string, and `f` for float or integer).
+
+A VCD file viewer can simultaneously display the timing and values for several tens of signals. The signal name should be kept reasonably short; excessively long names will increase the size of the signal list window, thereby reducing the available display area for the signal waveforms. Conversely, too short names impair readability.
+
+.*Example 1*
+----
+1    // MSG1_RTOS_TASK_SWITCHED_IN
+2    // >RTOS_TIMING "s _PreviousTaskTime_ms=%[T](*1000.).4f"
+3    // >RTOS_TASKS "%N %t Task%[M_LAST_TASK_NAME]4s %[T](*1000)7.4f\n"
+4    // >RTOS_TIMING "b Task%[M_LAST_TASK_NAME]s=0"
+5    // >RTOS_TIMING "s _Task_name=%[0:32s]s"
+6    // >RTOS_TIMING "b Task%[0:32s]s=1"
+7    // >>RTOS_MAIN "%N %t Task%[M_LAST_TASK_NAME]4s ran for %[T](*1000.).4f ms.\n           "
+8    // >>RTOS_MAIN ">>>> Task%[0:32u]<M_LAST_TASK_NAME>s switched in. <<<<\n"
+9    // >RTOS_TIMING "f Task%[M_LAST_TASK_NAME]s_Delay=R"
+----
+The `MSG1_RTOS_TASK_SWITCHED_IN` message is used when decoding the data logged by the `traceTASK_SWITCHED_IN` trace macro. The list item numbers correspond to the line numbers in the format definition shown above. +
+*Note:* If the message ID starts with `MSG1`, it signifies that the `traceTASK_SWITCHED_IN` macro logged an additional 32-bit word alongside the message ID and timestamp. In this specific instance, the extra 32-bit word contains the first four characters of the task's name. 
+
+1. Format ID name used in the `traceTASK_SWITCHED_IN` macro. It is automatically enumerated.
+2. The execution time of the previous task can be calculated when the next task starts and its timestamp is recorded.The following describes how the format specifiers are interpreted: +
+`%7.4f`: This specifies the format in which the resulting number will be printed (i.e., a floating-point number with a total width of min. 7 characters and 4 digits after the decimal point). +
+`[T](*1000)`: This defines that the time difference between the current and previous timestamp (for the same format ID) should be used. The time difference is captured in seconds and is then multiplied by 1000 to obtain milliseconds. +
+The output goes to the RTOS_TIMING (`RTOS_timing.vcd`) file. This is designated with the `>` print output redirection sign. +
+Note: The RTEmsg binary trace decoding tool retains the last timestamp for each format ID.
+3. Logs the same info as above to the RTOS_TASKS (`RTOS_tasks.log`) VCD file. +
+ *Note:* The `%[M_LAST_TASK_NAME]4s` format specifier dictates that the previous task name is used and printed as a four-character string. See line 8 for details on how the name is stored in the MEMO `M_LAST_TASK_NAME`.
+4. Logs information when the signal associated with the last task drops to zero (task execution stopped).
+5. Logs the current task name as a string. A name prefixed with an underscore (e.g., `_Task_name`) is used to ensure the signal is listed separately from all other task names when signal names are sorted alphabetically.
+6. Logs information upon the task-associated signal asserting logical high, indicating that task execution has begun.
+7. The previous task name is printed along with its run time. This info goes to RTOS_MAIN (RTOS_main.log) and to Main.log files. This is designated with the `>>` output redirection sign. +
+ `%N` - prints consecutive message number +
+ `%[t](*1000)` - prints current timestamp in ms (`[t]` - timestamp in seconds, `(*1000)` - scaled by 1000 to get ms) +
+ *Note:* The `%t` format specifier prints the timestamp in the default format (milliseconds [ms], unless otherwise defined using the RTEmsg command line option).
+8. Prints the name of the task that has just started execution. The name is enclosed in >>> <<< markers to make the currently active task visibly distinct within the log file during analysis, starting from this entry. +
+ *Note:* This line must be placed last, as the same MEMO field (or variable) is used in the preceding lines to recall/retrieve a previously stored value and a new value is set here.
+9. Since the previous task no longer executes from this point, its signal value is reset to 0 using "TaskName_Delay=R" (R=reset). This ensures that the delay value will be visible again on the waveform during the next `vTaskDelay()` call. Otherwise, if the task continuously requested the same delay value, the event itself (the task requesting the delay) would not be visible on the graph, as VCD vievers usually show just value changes. +
+ *Note:* The key difference compared to setting the value using "TaskName_Delay=0" is that if the task never called `vTaskDelay()`, the TaskName_Delay signal is not added to the VCD file at all. This prevents the VCD file from including signals that contain no logged content.
+
+.*Example 2*
+----
+1    // MSG2_RTOS_QUEUE_SEND_FROM_ISR
+2    // >>RTOS_MAIN "%N %[t](*1000) QueueSendFromISR to Queue%[32s]s successful, %u items in queue\n"
+3    // >RTOS_TIMING "f Queue%[32s]s_items=%[32:32u](+1)u"
+----
+1. Format ID name used in the traceQUEUE_SEND_FROM_ISR macro. +
+ This macro is one of several macros that log more information as provided by the macro definition - see link:https://freertos.org/Documentation/02-Kernel/02-Kernel-features/09-RTOS-trace-feature[Trace Hook Macros]. 
+2. Prints the queue name (the first logged parameter) and the number of items (the second parameter).The format specifier `%[32:32u](+1)u` defines that the second 32-bit word should be interpreted as a 32-bit unsigned integer and offset by `+1`.The reason for adding 1 is that the traceQUEUE_SEND_FROM_ISR macro logs the information before the item counter is incremented.If the scaling or offsetting functionality within the RTEdbg toolkit did not exist, the value of 1 would have to be added within the trace macro. While adding 1 in the macro would only minimally affect logging speed and the trace code size, it is nonetheless preferable to shift this offsetting operation to the decoding stage (executing on the host) rather than embedding it in the trace macro itself.
+3. Prints the same info as a signal to the VCD file.
+
+.*Example 3*
+----
+1    // MSG0_RTOS_TIMER_CREATE_FAILED
+2    // >>RTOS_MAIN "%N %[t](*1000) Timer create failed\n"
+3    // >RTOS_ERRORS "%N %[t](*1000) Timer create failed\n"
+4    // >RTOS_TIMING "b RTOSerror=P"
+5    // >RTOS_TIMING "s RTOSerrorText=Timer create failed"
+----
+
+1. Format ID name used in the TIMER_CREATE_FAILED macro.
+2. Information printed to the RTOS_main.log and Main.log.
+3. Same information printed to the RTOS_ERRORS (`RTOS_errors.log`) also. For all trace macros ending in FAILED, the RTOS error information is additionally printed to a dedicated error file. This ensures that all errors reported by the RTOS are centralized in a single file, facilitating quick and efficient review.
+4. A short pulse is shown on the `RTOSerror` signal to indicate when the error has been reported.
+5. The `RTOSerrorText` signal is used to display a more descriptive message.
+
+=== Grouping Trace Macros for Selective Logging
+
+The trace macros have been organized into distinct groups based on the perceived priority and relevance of the information they capture. Logging for these groups can be selectively enabled to get more detailed or longer history either *during project compilation* or at *runtime via the message filter*.
+
+.Available trace macro groups:
+....
+RTE_TRACE_RTOS_BASIC     Most important task, queue and notification trace macros
+RTE_TRACE_RTOS_TASKS     Task related events, including notifications
+RTE_TRACE_RTOS_MALLOC    Malloc and free
+RTE_TRACE_RTOS_TIMER     Timer related events
+RTE_TRACE_RTOS_QUEUE     Queue, semaphore, and mutex related events
+RTE_TRACE_RTOS_STREAMS   Stream related events
+RTE_TRACE_RTOS_EXPERT    Less important FreeRTOS events (for expert users)
+RTE_TRACE_RTOS_IO        Enable traceENTER/traceEXIT macros (for expert users)
+....
+
+The trace macros are grouped to allow users to select the desired level of detail:
+
+1. *BASIC* group (RTE_TRACE_RTOS_BASIC): Contains trace macros for logging the most essential information regarding tasks, queues, and task notifications.
+2. *EXPERT* group (RTE_TRACE_RTOS_EXPERT): Messages that generally do not offer significant value or are too granular for the average programmer are reserved for the EXPERT group.
+3. *IO* group enables the traceENTER/traceRETURN macros
+4. Other Groups: The remaining macro groups contain macros, categorized by data type, that were not included in the BASIC group.
+
+Message filter names parallel the compile-time trace configuration macros. For example, setting the filter `F_RTOS_BASIC` at runtime enables the identical group of trace macros as defining the compile-time macro `RTE_TRACE_RTOS_BASIC`.
+
+Highly verbose individual trace macros generate a large volume of data in the circular buffer but offer minimal analytical value to the typical tester. Examples include: traceISR_ENTER, traceTASK_INCREMENT_TICK, traceMOVED_TASK_TO_READY_STATE, tracePOST_MOVED_TASK_TO_READY_STATE, and traceMOVED_TASK_TO_DELAYED_LIST. Consequently, these macros have been assigned to the EXPERT group, which is recommended to be disabled by default in the configuration instructions. Several other macros were also categorized into the EXPERT group, as they were deemed non-essential for typical use by general programmers.
+
+*Note on Usability:* The current implementation may not be optimally user-friendly for developers who lack extensive knowledge of FreeRTOS. Consequently, not all users may fully grasp the meaning or relevance of every message in the log files or signal on the graph. In addition, not all data types desired by programmers are currently supported for graphical visualization within the VCD file.
+
+=== Proposing Changes or New Solutions
+
+*When proposing new solutions, the following factors should be considered:*
+
+1. *Trace History Length vs. Precision:* Proposed solutions must balance data richness against trace history length. Excessive additional data, while improving precision, inherently shortens the available recording time.
+2. *VCD Output and Graphical Clarity:* It is critical to consider not only what additional data is logged, but also how it will be exported to the VCD file to ensure a meaningful and intuitive graphical representation.
+3. *Usability:* The primary user base expects to simply use the RTOS and application tracing tool, not perform fine-tuning for specific needs. Therefore, the default configuration must be broadly and generally useful.
+4. *User-Centric Logging:* Text generated during RTOS event decoding must be chosen from the perspective of the end-user, who typically lacks deep knowledge of FreeRTOS internals and interacts with the kernel primarily through function calls (or often via the CMSIS layer).
+5. *Compatibility Risk and Versioning:* Note that FreeRTOS trace macros have very few parameters. Since the current solution already records more data than initially planned, further increases may introduce compatibility issues with older or future FreeRTOS versions. If such conflicts occur, multiple trace macro versions should be provided and managed using conditional compilation.
+6. *Execution Visualization Constraints:* Signal Management and Naming: When designing VCD export, acknowledge that simultaneous display is typically limited to 40-60 signals (screen size dependent). While users can select signals from a longer list, the total signal list must be manageable, especially in complex projects with numerous tasks and queues. Therefore limit the number of signals designated per single object (e.g., Task). Signal names must be concise to avoid excessive signal name window width, yet remain adequately descriptive for quick comprehension.
+7. *Additional Test and Demo Code:* When adding additional test or demo code, use conditional compilation to disable calls to functions that are not available in earlier versions of FreeRTOS.
+
+=== traceENTER / traceRETURN Macro Support
+The `rte_FreeRTOS_trace2.h` trace macro file supports logging using the traceENTER/traceRETURN macros. This functionality is specifically aimed at FreeRTOS developers and is supported only for FreeRTOS versions v11 and later. The current solution logs the values of macro parameters and measures the execution times of individual FreeRTOS functions. This time measurement is derived from the timestamp delta between the traceRETURN and traceENTER timestamps. This capability is essential for performing runtime optimization of functions directly within the live embedded system environment. +
+*Statistical Analysis:* The RTEdbg toolkit also provides built-in statistical support. By assigning specific names to these entry/exit time deltas, the system can automatically record and track the ten shortest and ten longest function execution times (for every function) observed during the trace session.
+
+=== Further Development and Contributions
+The current FreeRTOS tracing and visualization solution is built upon the core functionality of the RTEdbg toolkit. This solution will be continuously refined and expanded based on user community feedback and suggestions. However, there are currently no plans to develop custom RTEdbg toolkit functionality specifically for FreeRTOS needs (e.g., special supplementary features for the RTEmsg decoding software).
+
+*All types of community contributions are welcome, including:*
+
+1. Testing trace functionality and providing additional code to test macros not covered by the current demo code.
+2. Documentation improvement.
+3. Improving the text generated by individual trace macros to make them more understandable to programmers who are not FreeRTOS experts.
+4. Definition of optimal grouping strategy for trace macros, enabling control via conditional compilation or dynamic runtime activation.
+5. Functionality and usability improvements.
+6. Porting to other RTOS. 
