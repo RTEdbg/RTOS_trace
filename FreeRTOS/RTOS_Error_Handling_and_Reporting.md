@@ -6,9 +6,9 @@ The description assumes familiarity with the basics of the **[RTEdbg toolkit](ht
 
 ## FreeRTOS Error Logging Example
 
-Standard tracing in Real-Time Operating Systems (RTOS) typically focuses on normal operations, often providing poor or zero support for tracing special conditions or RTOS fatal errors. A dedicated tracing mechanism is therefore required for such critical errors. Using FreeRTOS as an example, we demonstrate how to include the logging of specific values that enable more precise localization of the cause of a kernel crash.
+Standard tracing in Real-Time Operating Systems (RTOS) typically focuses on normal operations, often providing poor or zero support for tracing special conditions or RTOS fatal errors. A dedicated tracing mechanism is therefore required for such critical errors. Using FreeRTOS as an example, we demonstrate how to include the logging of specific values that enable more precise localization of the cause of, for example, a kernel crash.
 
-Different RTOS handle and report errors that can occur during kernel execution in various ways. With FreeRTOS, the `configASSERT` macro is provided for this purpose. `FreeRTOS.h` header file holds the default version - see the definition:
+Different RTOS handle and report errors that can occur during kernel execution in various ways. With FreeRTOS, the `configASSERT` macro is provided for this purpose. `FreeRTOS.h` header file holds the default version as shown below:
 ```
 #ifndef configASSERT
 	#define configASSERT( x )
@@ -49,12 +49,12 @@ void __attribute__((noinline)) __attribute__((__noreturn__)) Kernel_error(void)
 ```
 The `configASSERT` macro is used extensively throughout FreeRTOS to check for the presence of fatal errors. This means that the function `Kernel_error()` will be called from many different locations (over 200 in the present FreeRTOS version). In order to distinguish which part of the kernel initiated the call, this function logs the value of the Program Counter (PC) as it was when the function was invoked.
 
-For some processors, the return address is saved on the stack, while on ARM Cortex, it is saved in the LR (Link Register), and on RISC-V, it is saved in the **ra** (return address) register, and so on.In the example above, the `__get_LR()` function is used, which is suitable for processors with ARM Cortex M cores. Few other options are provided below. However, there is no standard method that would be suitable for all processor types and compilers.
+For some processors, the return address is saved on the stack, while on ARM Cortex, it is saved in the LR (Link Register), and on RISC-V, it is saved in the **ra** (return address) register, and so on. In the example above, the `__get_LR()` function is used, which is suitable for processors with ARM Cortex M cores. Few other options are provided below. However, there is no standard method that would be suitable for all processor types and compilers.
 
 **Format code for the RTE_MSG1() macro:**
 ```
 // MSG1_KERNEL_ERROR "Kernel_error() called from address 0x%08X"
-* And optionally put the same info to the RTOS_ERRORS file also. */
+/* And optionally put the same info to the RTOS_ERRORS file also. */
 // >RTOS_ERRORS "%N %t Kernel_error() called from address 0x%08X\n"
 ```
 **Example:** In the case where the `Main.log` file contains a record for the format code `MSG1_KERNEL_ERROR` and the address printed is 0x24002962. You have to look into the assembly list file (for GCC this is ProjectName.list) and search for this address. Using this information we then determine the name of the function in which the error was detected—in our case, that is `prvDeleteTCB()` in the example shown.
@@ -80,7 +80,7 @@ For some processors, the return address is saved on the stack, while on ARM Cort
 
 ## Accessing the Link Register (LR) with Different Compilers for ARM Cortex M
 
-Link register holds the return address. The observation that the `__get_LR()` function is **not universally available** across all listed toolchains (GCC, ARM v6/armcc, IAR) is correct. This is because it is a **compiler-specific intrinsic function** or a **vendor-provided utility**, not part of the standard C language.
+Link register holds the return address. Unfortunatelly the `__get_LR()` function is **not universally available** across all listed toolchains (GCC, ARM v6/armcc, IAR). This is because it is a **compiler-specific intrinsic function** or a **vendor-provided utility**, not part of the standard C language.
 
 For projects that must support all three compilers, the best practice is to use conditional compilation to select the correct approach based on the predefined compiler macros:
 ```c
@@ -132,7 +132,7 @@ uint32_t get_lr(void)
 }
 ```
 
-## Other Possibilities to Detect an Log FreeRTOS Errors
+## Other Possibilities to Detect and Log FreeRTOS Errors
 
 Programmer can implement **Error Hook Functions** and add error logging to them:
 
