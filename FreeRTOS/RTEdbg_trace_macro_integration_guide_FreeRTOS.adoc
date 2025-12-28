@@ -2,6 +2,9 @@
 
 This document presents the integration of link:https://github.com/RTEdbg/RTEdbg[*RTEdbg*] trace functionality into FreeRTOS-based projects and outlines the data format used for subsequent graphical and textual analysis.
 
+:toc:
+
+= Introduction
 RTOS-aware debugging provides a necessary baseline by exposing the internal OS structures and data (such as running tasks, stack utilization, and queues) during a paused debugging session. On the other hand, deep runtime analysis (tracing) requires instrumenting the RTOS and firmware with trace macros to provide continuous data. Tracing enables visual execution analysis, helping developers quickly identify critical timing and concurrency issues such as task starvation, task jitter, deadlock, and priority inversion. Crucially, it also reveals the exact activities of all tasks and Interrupt Service Routines (ISRs) over time. The solution provides equally efficient and high-speed logging for all RTOS and application data, including exception handler crash dumps.
 
 Several textual RTOS log files and a VCD (Value Change Dump) file are generated during the decoding of the binary log file. The VCD file enables graphical representation of the data, allowing for efficient analysis of the behavior of applications running under an RTOS. The current FreeRTOS trace and visualization solution uses the core functionality of the RTEdbg toolkit. This solution is subject to continuous improvement and refinement based on community feedback.

@@ -134,7 +134,7 @@ uint32_t get_lr(void)
 
 ## Other Possibilities to Detect and Log FreeRTOS Errors
 
-Programmer can implement **Error Hook Functions** and add error logging to them:
+Programmer can implement additional **Error Hook Functions** and add error logging to them:
 
 1. **vApplicationStackOverflowHook()** <br>
    The kernel calls it automatically when it detects a Stack Overflow for a task. This is a crucial mechanism for preventing undefined system behavior. <br>
